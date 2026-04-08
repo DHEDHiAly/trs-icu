@@ -15,4 +15,6 @@ venv/
 *.pt
 *.pth
 data/raw/
+data/eicu/*.csv
+data/eicu/*.csv.gz
 *.log
