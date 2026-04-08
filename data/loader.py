@@ -18,6 +18,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from data.synthetic import generate_synthetic_eicu_csvs
+
 
 # ---------------------------------------------------------------------------
 # Google Drive folder download helper
@@ -102,8 +104,6 @@ def load_eicu_data(
             f"No CSV files found in '{data_dir}'. "
             "Generating synthetic eICU CSVs for demo …"
         )
-        from data.synthetic import generate_synthetic_eicu_csvs  # noqa: PLC0415
-
         generate_synthetic_eicu_csvs(str(data_dir))
         csv_files = sorted(
             list(data_dir.glob("*.csv")) + list(data_dir.glob("*.csv.gz"))

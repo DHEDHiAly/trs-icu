@@ -162,7 +162,7 @@ def generate_synthetic_eicu_csvs(
     patient_df = pd.DataFrame(
         {
             "patientunitstayid": pids,
-            "uniquepid": [f"S{p:04d}" for p in pids],
+            "uniquepid": [f"SYNTH{p:04d}" for p in pids],
             "age": rng.integers(40, 86, size=n_patients).tolist(),
             "gender": rng.choice(["Male", "Female"], size=n_patients).tolist(),
             "ethnicity": rng.choice(ethnicities, size=n_patients).tolist(),
