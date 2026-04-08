@@ -97,8 +97,16 @@ def load_eicu_data(
     )
 
     if not csv_files:
-        raise FileNotFoundError(
-            f"No CSV or CSV.GZ files found in '{data_dir}'."
+        # Auto-generate synthetic eICU CSVs so the demo works without real data
+        print(
+            f"No CSV files found in '{data_dir}'. "
+            "Generating synthetic eICU CSVs for demo …"
+        )
+        from data.synthetic import generate_synthetic_eicu_csvs  # noqa: PLC0415
+
+        generate_synthetic_eicu_csvs(str(data_dir))
+        csv_files = sorted(
+            list(data_dir.glob("*.csv")) + list(data_dir.glob("*.csv.gz"))
         )
 
     dataframes: Dict[str, pd.DataFrame] = {}
