@@ -53,10 +53,10 @@ streamlit run app/streamlit_app.py
 
 ### 4. Use real eICU data
 
-Place the eICU CSV/CSV.GZ files in a local directory (e.g. `data/raw/`) then:
+Place the eICU CSV/CSV.GZ files in `data/eicu/` (or any local directory) then:
 
 ```bash
-python main.py --data-dir data/raw --sample-patients 500
+python main.py --data-dir data/eicu --sample-patients 500
 ```
 
 Or download directly from Google Drive (requires `gdown`):
@@ -104,7 +104,7 @@ print(result.trajectories["fluids"])  # np.ndarray shape (6,) in mmHg
 Dataset available at:
 <https://drive.google.com/drive/folders/12b_rL9mTCUYBDaWU_rwJRqsrNQHaAPJ3>
 
-Required files:
+Required files (place in `data/eicu/`):
 - `vitalPeriodic.csv.gz`
 - `infusionDrug.csv.gz`
 - `patient.csv.gz`

@@ -272,3 +272,75 @@ def preprocess_all(
     print(f"  → {len(X)} sequences (X shape={X.shape}, y shape={y.shape}).")
 
     return X, y, treatment_labels, patient_ids, patient_info
+
+
+# ---------------------------------------------------------------------------
+# Self-test (python -m data.preprocessor)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import os
+    import tempfile
+
+    print("Running preprocessor self-test with synthetic eICU data …\n")
+
+    # Build minimal synthetic DataFrames that mimic eICU schema
+    rng = np.random.default_rng(0)
+    n_patients = 20
+    pids = list(range(1, n_patients + 1))
+
+    # vitalPeriodic: 24 hourly readings per patient
+    vital_rows = []
+    for pid in pids:
+        base = float(rng.uniform(60, 90))
+        for minute in range(0, 24 * 60, 60):
+            val = float(np.clip(base + rng.normal(0, 4), 20, 200))
+            vital_rows.append(
+                {"patientunitstayid": pid, "observationoffset": minute, "systemicmean": val}
+            )
+    vital_df = pd.DataFrame(vital_rows)
+
+    # infusionDrug: vasopressor for half the patients
+    infusion_rows = [
+        {"patientunitstayid": pid, "infusionoffset": 120, "drugname": "norepinephrine"}
+        for pid in pids[:n_patients // 2]
+    ]
+    infusion_df = pd.DataFrame(infusion_rows)
+
+    # patient demographics
+    patient_df = pd.DataFrame(
+        {
+            "patientunitstayid": pids,
+            "uniquepid": [f"U{p:04d}" for p in pids],
+            "age": rng.integers(40, 85, size=n_patients).tolist(),
+            "gender": rng.choice(["Male", "Female"], size=n_patients).tolist(),
+            "ethnicity": rng.choice(["Caucasian", "African American", "Asian"], size=n_patients).tolist(),
+            "admissionheight": rng.uniform(155, 185, size=n_patients).tolist(),
+            "admissionweight": rng.uniform(55, 110, size=n_patients).tolist(),
+            "unittype": ["MICU"] * n_patients,
+            "unitdischargestatus": ["Alive"] * n_patients,
+            "hospitaldischargestatus": ["Alive"] * n_patients,
+        }
+    )
+
+    dataframes = {
+        "vitalPeriodic": vital_df,
+        "infusionDrug": infusion_df,
+        "patient": patient_df,
+    }
+
+    X, y, treatment_labels, patient_ids, patient_info = preprocess_all(dataframes)
+
+    # Verification summary
+    print("\n--- Verification ---")
+    print(f"X shape           : {X.shape}   (samples × seq_len × features)")
+    print(f"y shape           : {y.shape}   (samples × pred_len)")
+    print(f"treatment_labels  : {np.bincount(treatment_labels, minlength=3)} (counts per label 0/1/2)")
+    print(f"patient_ids count : {len(patient_ids)} sample–patient mappings")
+    print(f"patient_info      : {patient_info.shape} rows × columns")
+    print(f"MAP range in X    : {X[:, :, 0].min():.1f} – {X[:, :, 0].max():.1f} mmHg")
+    print(f"MAP range in y    : {y.min():.1f} – {y.max():.1f} mmHg")
+    assert X.shape[1] == SEQ_LEN, f"Expected seq_len={SEQ_LEN}"
+    assert y.shape[1] == PRED_LEN, f"Expected pred_len={PRED_LEN}"
+    assert X.shape[2] == 2, "Expected 2 features: [MAP, treatment]"
+    print("\n✓ Preprocessor self-test passed.")
