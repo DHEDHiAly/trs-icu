@@ -99,7 +99,10 @@ class TRSModel(nn.Module):
         Tensor of shape (batch, pred_len)
         """
         map_feat = x[:, :, 0:1]                       # (batch, seq_len, 1)
-        treat_idx = x[:, :, 1].long()                 # (batch, seq_len)
+        # Clamp indices to valid embedding range before lookup
+        treat_idx = x[:, :, 1].long().clamp(
+            0, self.treatment_embedding.num_embeddings - 1
+        )                                              # (batch, seq_len)
         embed = self.treatment_embedding(treat_idx)    # (batch, seq_len, embed_dim)
         gru_in = torch.cat([map_feat, embed], dim=-1)  # (batch, seq_len, 1+embed_dim)
 

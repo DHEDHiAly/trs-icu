@@ -50,6 +50,12 @@ _FLUID_DRUGS = [
     "Albumin 5%",
 ]
 
+# Treatment effect parameters (must stay consistent with utils/helpers.py)
+_VASO_EFFECT_RANGE = (3.0, 6.0)
+_VASO_DECAY_RANGE = (0.40, 0.60)
+_FLUID_EFFECT_RANGE = (1.5, 3.0)
+_FLUID_DECAY_RANGE = (0.20, 0.35)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -80,9 +86,10 @@ def generate_synthetic_eicu_csvs(
         AR(1) process.  A quarter of patients start with hypotensive
         baselines (45-65 mmHg) to make the treatment effect meaningful.
     infusionDrug.csv
-        Patients whose ID mod 3 == 1 receive vasopressors; ID mod 3 == 2
-        receive fluids; the rest receive no infusions.  This ensures all
-        three treatment labels appear in the training set.
+        Treatment groups are randomly assigned using the seeded RNG:
+        vasopressors receive norepinephrine/etc. for the first 12 hours;
+        fluids receive saline/Ringer's for the first 8 hours.  All three
+        treatment labels appear in the training set.
     patient.csv
         Synthetic demographics (age, gender, ethnicity, height, weight,
         unit type, discharge status).
@@ -91,32 +98,37 @@ def generate_synthetic_eicu_csvs(
     rng = np.random.default_rng(seed)
     pids = list(range(1, n_patients + 1))
 
+    # Randomise treatment groups using the RNG for realistic assignment
+    groups = rng.integers(0, 3, size=n_patients).tolist()  # 0=none, 1=vaso, 2=fluids
+
     # ------------------------------------------------------------------
     # 1. vitalPeriodic — hourly MAP readings (AR-1 process per patient)
     # ------------------------------------------------------------------
     vital_rows = []
-    for pid in pids:
+    for pid, group in zip(pids, groups):
         # First quarter of patients are hypotensive for demo effect
         if pid <= n_patients // 4:
             base_map = float(rng.uniform(45, 65))
         else:
             base_map = float(rng.uniform(65, 90))
 
-        # Determine treatment group so the MAP trajectory reflects the
+        # Determine treatment effect so the MAP trajectory reflects the
         # causal effect: vasopressor → larger MAP lift; fluids → moderate lift
-        group = pid % 3
         if group == 1:   # vasopressor: strong, fast effect
-            effect_mag = float(rng.uniform(3.0, 6.0))
-            decay_rate = float(rng.uniform(0.40, 0.60))
+            effect_mag = float(rng.uniform(*_VASO_EFFECT_RANGE))
+            decay_rate = float(rng.uniform(*_VASO_DECAY_RANGE))
             treat_start_hour = 1   # treatment begins at hour 1
+            noise_std = 2.5
         elif group == 2:  # fluids: moderate, slower effect
-            effect_mag = float(rng.uniform(1.5, 3.0))
-            decay_rate = float(rng.uniform(0.20, 0.35))
+            effect_mag = float(rng.uniform(*_FLUID_EFFECT_RANGE))
+            decay_rate = float(rng.uniform(*_FLUID_DECAY_RANGE))
             treat_start_hour = 1
+            noise_std = 2.0
         else:             # no treatment
             effect_mag = 0.0
             decay_rate = 0.0
             treat_start_hour = 999  # never
+            noise_std = 2.0
 
         # 24 hourly observations; observationoffset in minutes
         for hour in range(24):
@@ -128,7 +140,6 @@ def generate_synthetic_eicu_csvs(
                 effect = effect_mag * float(np.exp(-decay_rate * hours_since))
             else:
                 effect = 0.0
-            noise_std = 2.5 if group == 1 else 2.0
             val = float(np.clip(base_map + effect + rng.normal(0, noise_std), 20, 200))
             vital_rows.append(
                 {
@@ -141,11 +152,10 @@ def generate_synthetic_eicu_csvs(
     vital_df = pd.DataFrame(vital_rows)
 
     # ------------------------------------------------------------------
-    # 2. infusionDrug — vasopressors / fluids (3-group split by patient ID)
+    # 2. infusionDrug — vasopressors / fluids
     # ------------------------------------------------------------------
     infusion_rows = []
-    for pid in pids:
-        group = pid % 3
+    for pid, group in zip(pids, groups):
         if group == 1:
             # Vasopressor group: norepinephrine for the first 12 hours
             drug = _VASO_DRUGS[pid % len(_VASO_DRUGS)]

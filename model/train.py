@@ -109,6 +109,8 @@ def train_model(
     history : dict with 'train_loss' and 'val_loss' lists
     map_mean, map_std : normalisation statistics (needed for inference)
     """
+    if embed_dim < 4:
+        raise ValueError(f"embed_dim must be >= 4 for expressive treatment representations, got {embed_dim}")
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
@@ -149,14 +151,16 @@ def train_model(
             pred = model(xb)
             main_loss = criterion(pred, yb)
 
-            # Counterfactual consistency loss: encourage divergence between arms
+            # Counterfactual consistency loss: encourage divergence between arms.
+            # Build a single 3x stacked batch with each treatment arm overridden
+            # to avoid redundant clones of the full tensor.
             if cf_loss_weight > 0:
-                # Stack all three counterfactual inputs in one forward pass
-                xb_none = xb.clone(); xb_none[:, :, 1] = 0.0
-                xb_fluid = xb.clone(); xb_fluid[:, :, 1] = 1.0
-                xb_vaso = xb.clone(); xb_vaso[:, :, 1] = 2.0
-                xb_all = torch.cat([xb_none, xb_fluid, xb_vaso], dim=0)
-                preds_all = model(xb_all)
+                b = xb.shape[0]
+                xb_stack = xb.unsqueeze(0).expand(3, -1, -1, -1).reshape(3 * b, *xb.shape[1:]).clone()
+                # Set treatment column to 0, 1, 2 for the three segments
+                treat_vals = torch.tensor([0.0, 1.0, 2.0], device=dev).repeat_interleave(b)
+                xb_stack[:, :, 1] = treat_vals.unsqueeze(1)
+                preds_all = model(xb_stack)
                 pred_none, pred_fluid, pred_vaso = preds_all.chunk(3, dim=0)
 
                 cf_loss = -torch.mean(

@@ -110,6 +110,7 @@ def extract_treatment_series(
     fluid_pattern = "|".join(FLUID_KEYWORDS)
 
     df["is_vaso"] = drug_lower.str.contains(vaso_pattern, na=False)
+    # Fluids are only flagged when the drug is NOT a vasopressor (vasopressor takes priority)
     df["is_fluid"] = drug_lower.str.contains(fluid_pattern, na=False) & ~df["is_vaso"]
     df = df[df["is_vaso"] | df["is_fluid"]]
 

@@ -30,6 +30,15 @@ TREATMENT_LABELS = {
 # Synthetic data
 # ---------------------------------------------------------------------------
 
+# Treatment effect parameters for synthetic data generation
+_FLUID_EFFECT_RANGE = (1.5, 3.0)    # MAP lift magnitude (mmHg)
+_FLUID_DECAY_RANGE = (0.20, 0.35)   # exponential decay rate (slower: 3–5 steps)
+_VASO_EFFECT_RANGE = (3.0, 6.0)     # MAP lift magnitude (mmHg)
+_VASO_DECAY_RANGE = (0.40, 0.60)    # exponential decay rate (faster: 1–3 steps)
+_VASO_NOISE_STD = 2.5               # slightly higher noise for vasopressor arm
+_BASE_NOISE_STD = 2.0               # noise for no-treatment and fluids arms
+
+
 def make_synthetic_sequences(
     n_patients: int = 200,
     seq_len: int = 6,
@@ -77,10 +86,10 @@ def make_synthetic_sequences(
 
         # Sample per-patient effect magnitudes and decay rates once, then
         # generate one prediction window per treatment arm
-        fluid_mag = float(rng.uniform(1.5, 3.0))
-        fluid_decay = float(rng.uniform(0.20, 0.35))   # slower: 3–5 steps
-        vaso_mag = float(rng.uniform(3.0, 6.0))
-        vaso_decay = float(rng.uniform(0.40, 0.60))    # faster: 1–3 steps
+        fluid_mag = float(rng.uniform(*_FLUID_EFFECT_RANGE))
+        fluid_decay = float(rng.uniform(*_FLUID_DECAY_RANGE))
+        vaso_mag = float(rng.uniform(*_VASO_EFFECT_RANGE))
+        vaso_decay = float(rng.uniform(*_VASO_DECAY_RANGE))
 
         for treat in range(3):  # 0=none, 1=fluids, 2=vasopressor
             x_treat = np.full(seq_len, float(treat), dtype=np.float32)
@@ -92,13 +101,13 @@ def make_synthetic_sequences(
                 ar_next = 0.9 * last + 0.1 * 75.0
                 if treat == 1:
                     effect = fluid_mag * np.exp(-fluid_decay * h)
-                    noise_std = 2.0
+                    noise_std = _BASE_NOISE_STD
                 elif treat == 2:
                     effect = vaso_mag * np.exp(-vaso_decay * h)
-                    noise_std = 2.5
+                    noise_std = _VASO_NOISE_STD
                 else:
                     effect = 0.0
-                    noise_std = 2.0
+                    noise_std = _BASE_NOISE_STD
                 next_val = ar_next + effect + float(rng.normal(0, noise_std))
                 next_val = float(np.clip(next_val, 30, 150))
                 y_map.append(next_val)
