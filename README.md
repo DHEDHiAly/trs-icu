@@ -1,8 +1,16 @@
+Here is a refined README version with clearer structure, more precise technical framing, and improved consistency for a hackathon + research audience.
+
+---
+
 # TRS-ICU · Treatment Response Simulator for ICU
 
-A hackathon-ready clinical AI project that simulates ICU patient **Mean
-Arterial Pressure (MAP)** trajectories under different treatments and provides
-**counterfactual predictions** via a GRU-based deep-learning model.
+A treatment-conditioned deep learning system for simulating ICU patient **Mean Arterial Pressure (MAP)** trajectories under different interventions and generating **counterfactual physiological responses** using a GRU-based dynamical model.
+
+The system supports both synthetic and real-world eICU data and produces three-way counterfactual predictions:
+
+* No treatment
+* Fluids
+* Vasopressor
 
 ---
 
@@ -11,18 +19,23 @@ Arterial Pressure (MAP)** trajectories under different treatments and provides
 ```
 trs-icu/
 ├── data/
-│   ├── loader.py          # Load CSV / CSV.GZ files (local or Google Drive)
-│   └── preprocessor.py    # Extract MAP series, vasopressor labels, build sequences
+│   ├── loader.py              # CSV / CSV.GZ ingestion (local + Google Drive support)
+│   └── preprocessor.py        # MAP extraction, drug labeling, sequence construction
+│
 ├── model/
-│   ├── gru_model.py       # PyTorch GRU model (treatment-conditioned)
-│   └── train.py           # Training loop, evaluation (MSE / RMSE / MAE)
+│   ├── gru_model.py          # Treatment-conditioned GRU dynamics model
+│   └── train.py              # Training loop, evaluation, and counterfactual diagnostics
+│
 ├── inference/
-│   └── counterfactual.py  # predict_counterfactuals() – 3 treatment arms
+│   └── counterfactual.py     # 3-arm counterfactual prediction API
+│
 ├── app/
-│   └── streamlit_app.py   # Streamlit visualisation interface
+│   └── streamlit_app.py      # Interactive visualization interface
+│
 ├── utils/
-│   └── helpers.py         # Synthetic data, Plotly charts, sequence helpers
-├── main.py                # CLI pipeline orchestrator
+│   └── helpers.py            # Synthetic data generation + sequence utilities + plotting
+│
+├── main.py                   # CLI pipeline orchestrator (train / eval / demo)
 └── requirements.txt
 ```
 
@@ -36,48 +49,73 @@ trs-icu/
 pip install -r requirements.txt
 ```
 
-### 2. Run the demo (no data required)
+---
 
-Trains on synthetic MAP data and shows counterfactual predictions in the
-terminal:
+### 2. Run synthetic demo (no dataset required)
+
+Trains and evaluates the model on synthetic MAP trajectories and prints counterfactual responses:
 
 ```bash
 python main.py --demo
 ```
 
-### 3. Launch the Streamlit app
+---
+
+### 3. Launch Streamlit interface
 
 ```bash
 streamlit run app/streamlit_app.py
 ```
 
-### 4. Use real eICU data
+Provides:
 
-Place the eICU CSV/CSV.GZ files in `data/eicu/` (or any local directory) then:
+* Manual MAP input
+* Real-time counterfactual simulation
+* Treatment comparison plots
+
+---
+
+### 4. Run on real eICU data
+
+Place dataset files in:
+
+```
+data/eicu/
+```
+
+Then run:
 
 ```bash
 python main.py --data-dir data/eicu --sample-patients 500
 ```
 
-Or download directly from Google Drive (requires `gdown`):
+---
+
+### 5. Download dataset (Google Drive)
 
 ```bash
 python main.py --download --sample-patients 500
+```
+
+Requires:
+
+```bash
+pip install gdown
 ```
 
 ---
 
 ## Key Features
 
-| Feature | Details |
-|---|---|
-| **Data loading** | Loads all CSV/CSV.GZ from a directory; Google Drive download via gdown |
-| **MAP extraction** | Hourly resampled MAP from `vitalPeriodic`; robust NaN handling |
-| **Vasopressor labels** | Drug-name matching across 7 vasopressor families |
-| **GRU model** | Configurable hidden size, layers, dropout; treatment feature in input |
-| **Counterfactual inference** | Three arms: No Treatment / Fluids / Vasopressor |
-| **Streamlit app** | Interactive MAP entry, Plotly trajectory chart, treatment recommendation |
-| **Synthetic demo** | AR(1) MAP generator for zero-data development / testing |
+| Component             | Description                                               |
+| --------------------- | --------------------------------------------------------- |
+| Data ingestion        | Loads CSV/CSV.GZ files from local storage or Google Drive |
+| MAP processing        | Hourly resampling with robust missing-value handling      |
+| Treatment labeling    | Rule-based extraction of vasopressors and IV fluids       |
+| GRU model             | Sequence model conditioned on treatment embedding         |
+| Counterfactual engine | Simulates 3 intervention arms per patient                 |
+| Streamlit UI          | Interactive clinical visualization tool                   |
+| Synthetic mode        | Fully generative AR-style MAP simulator for testing       |
 
 ---
 
@@ -87,24 +125,71 @@ python main.py --download --sample-patients 500
 from inference.counterfactual import predict_counterfactuals
 from utils.helpers import sequence_from_map_values
 
-# Build input from the last 6 MAP readings
-sequence = sequence_from_map_values([72, 70, 68, 66, 64, 62], treatment_label=0)
+# Build input sequence from last observed MAP values
+sequence = sequence_from_map_values(
+    [72, 70, 68, 66, 64, 62],
+    treatment_label=0
+)
 
 # Run counterfactual inference
-result = predict_counterfactuals(sequence, model, map_mean=mean, map_std=std)
+result = predict_counterfactuals(
+    sequence,
+    model,
+    map_mean=mean,
+    map_std=std
+)
 
-print(result.best_treatment)          # e.g. "vasopressor"
-print(result.trajectories["fluids"])  # np.ndarray shape (6,) in mmHg
+print(result.best_treatment)
+print(result.trajectories["fluids"])   # shape: (T,)
 ```
 
 ---
 
-## eICU Data Source
+## eICU Dataset
 
-Dataset available at:
-<https://drive.google.com/drive/folders/12b_rL9mTCUYBDaWU_rwJRqsrNQHaAPJ3>
+Dataset source:
 
-Required files (place in `data/eicu/`):
-- `vitalPeriodic.csv.gz`
-- `infusionDrug.csv.gz`
-- `patient.csv.gz`
+[https://drive.google.com/drive/folders/12b_rL9mTCUYBDaWU_rwJRqsrNQHaAPJ3](https://drive.google.com/drive/folders/12b_rL9mTCUYBDaWU_rwJRqsrNQHaAPJ3)
+
+Required files:
+
+```
+data/eicu/
+├── vitalPeriodic.csv.gz
+├── infusionDrug.csv.gz
+└── patient.csv.gz
+```
+
+---
+
+## Model Overview
+
+The GRU-based model learns a conditional dynamics function:
+
+* Input: MAP time series + treatment embedding
+* Output: next-step MAP prediction
+* Conditioning: learned embedding of intervention type
+
+The model supports:
+
+* Counterfactual rollouts under alternative treatments
+* Multi-step trajectory simulation
+* Treatment effect separation via learned latent perturbations
+
+---
+
+## Output Interpretation
+
+Counterfactual outputs represent:
+
+* Expected MAP trajectory under each intervention
+* Relative treatment effect magnitude over time
+* Model-derived treatment recommendation (argmax response)
+
+---
+
+## Notes
+
+* Synthetic mode is intended for debugging and pipeline validation only
+* Real-world performance depends on quality of treatment labeling in eICU
+* Counterfactual outputs are predictive, not causal guarantees
