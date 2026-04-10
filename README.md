@@ -1,6 +1,4 @@
-Here is a refined README version with clearer structure, more precise technical framing, and improved consistency for a hackathon + research audience.
 
----
 
 # TRS-ICU · Treatment Response Simulator for ICU
 
