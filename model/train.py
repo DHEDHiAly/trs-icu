@@ -268,14 +268,15 @@ def evaluate_counterfactual_effects(
     dict with keys 'delta_fluids_h1', 'delta_vaso_h1', 'ordering_ok'
     """
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    dev = torch.device(device)
+        dev = next(model.parameters()).device
+    else:
+        dev = torch.device(device)
 
     idx = np.random.default_rng(0).choice(len(X), size=min(n_samples, len(X)), replace=False)
     X_sub = X[idx].copy().astype(np.float32)
     X_sub[:, :, 0] = (X_sub[:, :, 0] - map_mean) / (map_std + 1e-8)
 
-    x_tensor = torch.tensor(X_sub, dtype=torch.float32).to(dev)
+    x_tensor = torch.tensor(X_sub, dtype=torch.float32, device=dev)
 
     model.eval()
     with torch.no_grad():
