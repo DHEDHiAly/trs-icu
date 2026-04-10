@@ -323,8 +323,9 @@ def evaluate_model(
     dict with keys 'mse' and 'rmse'
     """
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    dev = torch.device(device)
+        dev = next(model.parameters()).device
+    else:
+        dev = torch.device(device)
 
     X_norm, y_norm = normalise(X, y, map_mean, map_std)
     dataset = _make_tensor_dataset(X_norm, y_norm)
