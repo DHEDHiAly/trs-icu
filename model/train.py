@@ -76,6 +76,7 @@ def denormalise(y_norm: np.ndarray, mean: float, std: float) -> np.ndarray:
 def train_model(
     X: np.ndarray,
     y: np.ndarray,
+    embed_dim: int = 8,
     hidden_size: int = 64,
     num_layers: int = 2,
     pred_len: int = 6,
@@ -84,15 +85,22 @@ def train_model(
     batch_size: int = 128,
     lr: float = 1e-3,
     val_fraction: float = 0.15,
+    cf_loss_weight: float = 0.05,
     device: Optional[str] = None,
     verbose: bool = True,
 ) -> Tuple[TRSModel, Dict[str, float], float, float]:
-    """Train the GRU model.
+    """Train the GRU model with treatment embedding and counterfactual consistency loss.
 
     Parameters
     ----------
     X : np.ndarray, shape (N, seq_len, 2)
+        Column 0: MAP values, Column 1: treatment index (0/1/2) as float.
     y : np.ndarray, shape (N, pred_len)
+    embed_dim : int
+        Dimension of the learned treatment embedding (>= 4).
+    cf_loss_weight : float
+        Weight for the counterfactual consistency loss (encourages divergence
+        between treatment trajectories).  Set to 0 to disable.
     ... (other hyperparameters)
 
     Returns
@@ -115,7 +123,7 @@ def train_model(
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     model = TRSModel(
-        input_size=X.shape[-1],
+        embed_dim=embed_dim,
         hidden_size=hidden_size,
         num_layers=num_layers,
         pred_len=pred_len,
@@ -137,12 +145,32 @@ def train_model(
         for xb, yb in train_loader:
             xb, yb = xb.to(dev), yb.to(dev)
             optimizer.zero_grad()
+
             pred = model(xb)
-            loss = criterion(pred, yb)
+            main_loss = criterion(pred, yb)
+
+            # Counterfactual consistency loss: encourage divergence between arms
+            if cf_loss_weight > 0:
+                # Stack all three counterfactual inputs in one forward pass
+                xb_none = xb.clone(); xb_none[:, :, 1] = 0.0
+                xb_fluid = xb.clone(); xb_fluid[:, :, 1] = 1.0
+                xb_vaso = xb.clone(); xb_vaso[:, :, 1] = 2.0
+                xb_all = torch.cat([xb_none, xb_fluid, xb_vaso], dim=0)
+                preds_all = model(xb_all)
+                pred_none, pred_fluid, pred_vaso = preds_all.chunk(3, dim=0)
+
+                cf_loss = -torch.mean(
+                    torch.abs(pred_vaso - pred_none)
+                    + torch.abs(pred_fluid - pred_none)
+                )
+                loss = main_loss + cf_loss_weight * cf_loss
+            else:
+                loss = main_loss
+
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-            train_losses.append(loss.item())
+            train_losses.append(main_loss.item())
 
         # ---- Validate ----
         model.eval()
@@ -209,3 +237,66 @@ def evaluate_model(
 
     print(f"Evaluation — MSE={mse:.2f}  RMSE={rmse:.2f}  MAE={mae:.2f} (mmHg)")
     return {"mse": mse, "rmse": rmse, "mae": mae}
+
+
+def evaluate_counterfactual_effects(
+    model: TRSModel,
+    X: np.ndarray,
+    map_mean: float,
+    map_std: float,
+    device: Optional[str] = None,
+    n_samples: int = 512,
+) -> Dict[str, float]:
+    """Log average treatment effects and verify their ordering.
+
+    Computes ΔMAP_fluids = mean(y_fluids - y_none) and
+    ΔMAP_vaso = mean(y_vaso - y_none) for the first prediction horizon.
+
+    Parameters
+    ----------
+    model : trained TRSModel
+    X : np.ndarray, shape (N, seq_len, 2)  — unnormalised
+    map_mean, map_std : normalisation statistics
+    n_samples : max samples to use for the diagnostic
+
+    Returns
+    -------
+    dict with keys 'delta_fluids_h1', 'delta_vaso_h1', 'ordering_ok'
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+
+    idx = np.random.default_rng(0).choice(len(X), size=min(n_samples, len(X)), replace=False)
+    X_sub = X[idx].copy().astype(np.float32)
+    X_sub[:, :, 0] = (X_sub[:, :, 0] - map_mean) / (map_std + 1e-8)
+
+    x_tensor = torch.tensor(X_sub, dtype=torch.float32).to(dev)
+
+    model.eval()
+    with torch.no_grad():
+        p_none = model.predict_with_treatment(x_tensor, 0).cpu().numpy() * map_std + map_mean
+        p_fluid = model.predict_with_treatment(x_tensor, 1).cpu().numpy() * map_std + map_mean
+        p_vaso = model.predict_with_treatment(x_tensor, 2).cpu().numpy() * map_std + map_mean
+
+    delta_fluid = float(np.mean(p_fluid[:, 0] - p_none[:, 0]))
+    delta_vaso = float(np.mean(p_vaso[:, 0] - p_none[:, 0]))
+    ordering_ok = bool(delta_vaso > delta_fluid > 0)
+
+    print(f"\n--- Counterfactual Treatment Effect Diagnostics (h+1) ---")
+    print(f"  ΔMAP_fluids     = {delta_fluid:+.2f} mmHg")
+    print(f"  ΔMAP_vasopressor= {delta_vaso:+.2f} mmHg")
+    if ordering_ok:
+        print("  ✓ Ordering satisfied: vasopressor > fluids > no-treatment")
+    else:
+        print(
+            "  ✗ WARNING: Expected ΔMAP_vaso > ΔMAP_fluids > 0, "
+            f"got {delta_vaso:.2f} > {delta_fluid:.2f} > 0"
+        )
+    print("-" * 55)
+
+    return {
+        "delta_fluids_h1": delta_fluid,
+        "delta_vaso_h1": delta_vaso,
+        "ordering_ok": ordering_ok,
+    }

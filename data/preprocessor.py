@@ -32,6 +32,12 @@ VASOPRESSOR_KEYWORDS = [
     "phenylephrine", "dobutamine", "milrinone",
 ]
 
+# Fluid drug names (case-insensitive partial match)
+FLUID_KEYWORDS = [
+    "normal saline", "0.9% sodium chloride", "lactated ringer",
+    "albumin", "plasmalyte", "hartmann", "dextrose",
+]
+
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -78,13 +84,17 @@ def extract_map_series(
     return series_by_patient
 
 
-def extract_vasopressor_series(
+def extract_treatment_series(
     infusion_df: pd.DataFrame,
     patient_ids: Optional[List[int]] = None,
 ) -> Dict[int, pd.Series]:
     """Return a dict ``{patientunitstayid: hourly_treatment_series}``.
 
-    Values are integer treatment labels (TREAT_NONE / TREAT_VASOPRESSOR).
+    Values are integer treatment labels:
+      TREAT_NONE (0)        — no recognised infusion
+      TREAT_FLUID (1)       — IV fluid detected
+      TREAT_VASOPRESSOR (2) — vasopressor detected (takes priority over fluids)
+
     The input DataFrame should come from ``infusionDrug.csv.gz``.
     """
     required = {"patientunitstayid", "infusionoffset", "drugname"}
@@ -94,11 +104,14 @@ def extract_vasopressor_series(
 
     df = infusion_df[["patientunitstayid", "infusionoffset", "drugname"]].copy()
     df = df.dropna(subset=["drugname"])
+    drug_lower = df["drugname"].str.lower()
 
-    # Flag vasopressors
-    pattern = "|".join(VASOPRESSOR_KEYWORDS)
-    df["is_vaso"] = df["drugname"].str.lower().str.contains(pattern, na=False)
-    df = df[df["is_vaso"]]
+    vaso_pattern = "|".join(VASOPRESSOR_KEYWORDS)
+    fluid_pattern = "|".join(FLUID_KEYWORDS)
+
+    df["is_vaso"] = drug_lower.str.contains(vaso_pattern, na=False)
+    df["is_fluid"] = drug_lower.str.contains(fluid_pattern, na=False) & ~df["is_vaso"]
+    df = df[df["is_vaso"] | df["is_fluid"]]
 
     if patient_ids is not None:
         df = df[df["patientunitstayid"].isin(patient_ids)]
@@ -107,11 +120,28 @@ def extract_vasopressor_series(
     for pid, grp in df.groupby("patientunitstayid"):
         grp = grp.sort_values("infusionoffset")
         grp.index = pd.to_timedelta(grp["infusionoffset"], unit="min")
-        vaso_series = pd.Series(TREAT_VASOPRESSOR, index=grp.index, name="treatment")
-        # Resample to hourly: if any vasopressor was active in an hour → label 2
-        hourly = vaso_series.resample(RESAMPLE_FREQ).max().fillna(TREAT_NONE)
+
+        # Assign label: vasopressor takes priority (2 > 1 > 0)
+        label_series = pd.Series(TREAT_NONE, index=grp.index, name="treatment")
+        label_series[grp["is_fluid"]] = TREAT_FLUID
+        label_series[grp["is_vaso"]] = TREAT_VASOPRESSOR
+
+        # Resample to hourly: max label per hour preserves priority ordering
+        hourly = label_series.resample(RESAMPLE_FREQ).max().fillna(TREAT_NONE)
         treatment_by_patient[int(pid)] = hourly.astype(int)
     return treatment_by_patient
+
+
+def extract_vasopressor_series(
+    infusion_df: pd.DataFrame,
+    patient_ids: Optional[List[int]] = None,
+) -> Dict[int, pd.Series]:
+    """Backward-compatible alias for ``extract_treatment_series``.
+
+    .. deprecated::
+        Use ``extract_treatment_series`` which also detects IV fluids.
+    """
+    return extract_treatment_series(infusion_df, patient_ids=patient_ids)
 
 
 def extract_patient_info(patient_df: pd.DataFrame) -> pd.DataFrame:
@@ -261,11 +291,11 @@ def preprocess_all(
 
     treatment_series: Dict[int, pd.Series] = {}
     if "infusionDrug" in dataframes:
-        print("Building vasopressor series …")
-        treatment_series = extract_vasopressor_series(
+        print("Building treatment series (vasopressor + fluids) …")
+        treatment_series = extract_treatment_series(
             dataframes["infusionDrug"], patient_ids=all_pids
         )
-        print(f"  → {len(treatment_series)} patients with vasopressor data.")
+        print(f"  → {len(treatment_series)} patients with treatment data.")
 
     print("Building sequences …")
     X, y, treatment_labels, patient_ids = build_sequences(map_series, treatment_series)

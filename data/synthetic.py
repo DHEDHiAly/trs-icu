@@ -102,11 +102,34 @@ def generate_synthetic_eicu_csvs(
         else:
             base_map = float(rng.uniform(65, 90))
 
+        # Determine treatment group so the MAP trajectory reflects the
+        # causal effect: vasopressor → larger MAP lift; fluids → moderate lift
+        group = pid % 3
+        if group == 1:   # vasopressor: strong, fast effect
+            effect_mag = float(rng.uniform(3.0, 6.0))
+            decay_rate = float(rng.uniform(0.40, 0.60))
+            treat_start_hour = 1   # treatment begins at hour 1
+        elif group == 2:  # fluids: moderate, slower effect
+            effect_mag = float(rng.uniform(1.5, 3.0))
+            decay_rate = float(rng.uniform(0.20, 0.35))
+            treat_start_hour = 1
+        else:             # no treatment
+            effect_mag = 0.0
+            decay_rate = 0.0
+            treat_start_hour = 999  # never
+
         # 24 hourly observations; observationoffset in minutes
         for hour in range(24):
             # Mean-reverting AR(1) process centred at 75 mmHg
             base_map = 0.9 * base_map + 0.1 * 75.0 + float(rng.normal(0, 2))
-            val = float(np.clip(base_map + rng.normal(0, 3), 20, 200))
+            # Add decaying treatment effect from treat_start_hour onwards
+            if hour >= treat_start_hour:
+                hours_since = hour - treat_start_hour
+                effect = effect_mag * float(np.exp(-decay_rate * hours_since))
+            else:
+                effect = 0.0
+            noise_std = 2.5 if group == 1 else 2.0
+            val = float(np.clip(base_map + effect + rng.normal(0, noise_std), 20, 200))
             vital_rows.append(
                 {
                     "patientunitstayid": pid,

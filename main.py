@@ -112,10 +112,11 @@ def save_model(path: str, model, map_mean: float, map_std: float) -> None:
             "map_mean": map_mean,
             "map_std": map_std,
             "config": {
-                "input_size": model.gru.input_size,
                 "hidden_size": model.hidden_size,
                 "num_layers": model.num_layers,
                 "pred_len": model.pred_len,
+                "embed_dim": model.embed_dim,
+                "use_film": model.use_film,
             },
         },
         path,
@@ -203,9 +204,10 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     if X is not None:
         print("\nEvaluating on training set (as a sanity check) …")
-        from model.train import evaluate_model
+        from model.train import evaluate_model, evaluate_counterfactual_effects
 
         evaluate_model(model, X, y, map_mean, map_std)
+        evaluate_counterfactual_effects(model, X, map_mean, map_std)
 
     # ------------------------------------------------------------------ #
     # 4. Counterfactual demo

@@ -38,12 +38,24 @@ def make_synthetic_sequences(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int]]:
     """Generate synthetic MAP sequences for development / unit testing.
 
-    MAP is modelled as a noisy AR(1) process centred around 75 mmHg.
-    Vasopressors are assumed to raise MAP by ~10 mmHg on average.
+    For each base patient trajectory, **three counterfactual versions** are
+    created—one per treatment arm—with the same observed MAP history but
+    different future trajectories reflecting the causal treatment effect:
+
+    * No treatment (0): pure AR(1) continuation around 75 mmHg.
+    * Fluids (1): AR(1) plus a positive MAP effect (+1.5–3 mmHg) that decays
+      exponentially over ~3–5 prediction steps.
+    * Vasopressor (2): AR(1) plus a stronger immediate effect (+3–6 mmHg)
+      with faster onset and faster decay, and slightly higher noise.
+
+    This ensures that the same input MAP sequence paired with different
+    treatment labels produces distinctly different future trajectories,
+    forcing the model to learn causal treatment effects rather than relying
+    solely on MAP level.
 
     Returns
     -------
-    X : (N, seq_len, 2)
+    X : (N, seq_len, 2)  — column 0: MAP, column 1: treatment index (0/1/2)
     y : (N, pred_len)
     treatment_labels : (N,)
     patient_ids : list of int
@@ -52,29 +64,49 @@ def make_synthetic_sequences(
     X_list, y_list, treat_list, pid_list = [], [], [], []
 
     for pid in range(n_patients):
-        n_steps = seq_len + pred_len + rng.integers(0, 12)
-        treat_label = rng.integers(0, 3)  # 0, 1, or 2
+        # Generate the observed historical MAP sequence (treatment-agnostic)
+        n_history = seq_len + rng.integers(0, 6)
+        base_map = float(rng.uniform(55, 85))
+        history = [base_map]
+        for _ in range(n_history - 1):
+            next_val = 0.9 * history[-1] + 0.1 * 75.0 + float(rng.normal(0, 2))
+            history.append(float(np.clip(next_val, 30, 150)))
 
-        # Baseline MAP around 65–85 mmHg
-        base_map = rng.uniform(65, 85)
-        # Treatment effect: vasopressor +10, fluids +5
-        treat_effect = {0: 0.0, 1: 5.0, 2: 10.0}[int(treat_label)]
+        # Use the last seq_len steps as the common input window
+        x_map = np.array(history[-seq_len:], dtype=np.float32)
 
-        map_vals = [base_map]
-        for _ in range(n_steps - 1):
-            next_val = 0.9 * map_vals[-1] + 0.1 * (75 + treat_effect) + rng.normal(0, 3)
-            map_vals.append(float(np.clip(next_val, 30, 150)))
+        # Sample per-patient effect magnitudes and decay rates once, then
+        # generate one prediction window per treatment arm
+        fluid_mag = float(rng.uniform(1.5, 3.0))
+        fluid_decay = float(rng.uniform(0.20, 0.35))   # slower: 3–5 steps
+        vaso_mag = float(rng.uniform(3.0, 6.0))
+        vaso_decay = float(rng.uniform(0.40, 0.60))    # faster: 1–3 steps
 
-        map_vals = np.array(map_vals, dtype=np.float32)
-        treat_vals = np.full(n_steps, treat_label, dtype=np.float32)
+        for treat in range(3):  # 0=none, 1=fluids, 2=vasopressor
+            x_treat = np.full(seq_len, float(treat), dtype=np.float32)
 
-        for start in range(n_steps - seq_len - pred_len + 1):
-            x_map = map_vals[start : start + seq_len]
-            x_treat = treat_vals[start : start + seq_len]
-            y_map = map_vals[start + seq_len : start + seq_len + pred_len]
+            # Simulate future MAP under this treatment
+            y_map = []
+            last = float(x_map[-1])
+            for h in range(pred_len):
+                ar_next = 0.9 * last + 0.1 * 75.0
+                if treat == 1:
+                    effect = fluid_mag * np.exp(-fluid_decay * h)
+                    noise_std = 2.0
+                elif treat == 2:
+                    effect = vaso_mag * np.exp(-vaso_decay * h)
+                    noise_std = 2.5
+                else:
+                    effect = 0.0
+                    noise_std = 2.0
+                next_val = ar_next + effect + float(rng.normal(0, noise_std))
+                next_val = float(np.clip(next_val, 30, 150))
+                y_map.append(next_val)
+                last = next_val
+
             X_list.append(np.stack([x_map, x_treat], axis=-1))
-            y_list.append(y_map)
-            treat_list.append(int(treat_label))
+            y_list.append(np.array(y_map, dtype=np.float32))
+            treat_list.append(treat)
             pid_list.append(pid)
 
     return (
