@@ -30,6 +30,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import sys
 
@@ -112,11 +113,11 @@ def save_model(path: str, model, map_mean: float, map_std: float) -> None:
             "map_mean": map_mean,
             "map_std": map_std,
             "config": {
+                "num_treatments": model.treatment_embedding.num_embeddings,
                 "hidden_size": model.hidden_size,
                 "num_layers": model.num_layers,
                 "pred_len": model.pred_len,
                 "embed_dim": model.embed_dim,
-                "use_film": model.use_film,
             },
         },
         path,
@@ -128,7 +129,9 @@ def load_model(path: str):
     from model.gru_model import TRSModel
 
     ckpt = torch.load(path, map_location="cpu")
-    cfg = ckpt["config"]
+    cfg = dict(ckpt.get("config", {}))
+    valid_keys = set(inspect.signature(TRSModel.__init__).parameters.keys()) - {"self"}
+    cfg = {k: v for k, v in cfg.items() if k in valid_keys}
     model = TRSModel(**cfg)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()

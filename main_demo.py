@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         description="TRS-ICU hackathon demo — runs end-to-end on synthetic data."
     )
     parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Compatibility flag (ignored): main_demo.py always runs in demo mode.",
+    )
+    parser.add_argument(
         "--n-patients",
         type=int,
         default=200,
@@ -83,6 +88,12 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for synthetic data generation (default: 42).",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["all", "demo", "eval", "audit"],
+        default="all",
+        help="Run mode: demo=counterfactual rollouts, eval=metrics, audit=assert checks, all=everything.",
+    )
     return parser.parse_args()
 
 
@@ -108,6 +119,8 @@ def _step(n: int, desc: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # Resolve data directory relative to this script
     repo_root = os.path.dirname(os.path.abspath(__file__))
@@ -210,10 +223,11 @@ def main() -> None:
                 "map_mean": map_mean,
                 "map_std": map_std,
                 "config": {
-                    "input_size": model.gru.input_size,
+                    "num_treatments": model.treatment_embedding.num_embeddings,
                     "hidden_size": model.hidden_size,
                     "num_layers": model.num_layers,
                     "pred_len": model.pred_len,
+                    "embed_dim": model.embed_dim,
                 },
             },
             args.save_model,
@@ -233,43 +247,88 @@ def main() -> None:
     print(f"  MAE  = {metrics['mae']:.2f} mmHg")
 
     # ------------------------------------------------------------------ #
-    # Step 6 – Counterfactual inference                                   #
+    # Step 6 – Counterfactual inference on a deterministic patient cohort #
     #          Three arms: no treatment / fluids / vasopressor            #
     # ------------------------------------------------------------------ #
-    _step(6, "Counterfactual inference — 3 treatment arms")
+    _step(6, "Counterfactual inference — reproducible cohort")
 
     from inference.counterfactual import predict_counterfactuals
     from utils.helpers import sequence_from_map_values, TREATMENT_LABELS
+    from model.train import evaluate_counterfactual_effects
 
-    # Representative demo patient: descending MAP (hypotensive trend)
-    demo_map = [72.0, 70.0, 68.0, 66.0, 64.0, 62.0]
-    print(f"\nDemo patient — past 6 h MAP (mmHg): {demo_map}")
+    rng = np.random.default_rng(args.seed)
+    n_demo_patients = min(20, max(10, args.n_patients // 2))
+    sampled_idx = rng.choice(len(X), size=min(n_demo_patients, len(X)), replace=False)
 
-    sequence = sequence_from_map_values(demo_map, treatment_label=0)
-    result = predict_counterfactuals(sequence, model, map_mean=map_mean, map_std=map_std)
+    cohort_ordering_ratio = 0.0
+    if args.mode in ("all", "demo"):
+        print(f"\nRunning counterfactuals for {len(sampled_idx)} patients (seed={args.seed})")
+        print("Each patient: full trajectories, DeltaMAP, ordering validity")
 
-    print("\nPredicted MAP trajectories (next 6 hours):")
-    header = f"  {'Treatment':15s}  " + "  ".join(f"+{i+1}h" for i in range(6))
-    print(header)
-    print("  " + "-" * (len(header) - 2))
-    for name, traj in result.trajectories.items():
-        label = TREATMENT_LABELS.get(name, name)
-        traj_str = "  ".join(f"{v:5.1f}" for v in traj)
-        marker = " ★" if name == result.best_treatment else ""
-        print(f"  {label:15s}  {traj_str}{marker}")
+        cohort_ordering_flags = []
+        for i, idx in enumerate(sampled_idx.tolist(), start=1):
+            past_map = X[idx, :, 0].astype(float).tolist()
+            sequence = sequence_from_map_values(past_map, treatment_label=0)
+            result = predict_counterfactuals(sequence, model, map_mean=map_mean, map_std=map_std)
+
+            traj_none = result.trajectories["no_treatment"]
+            traj_fluid = result.trajectories["fluids"]
+            traj_vaso = result.trajectories["vasopressor"]
+            d_fluid = traj_fluid - traj_none
+            d_vaso = traj_vaso - traj_none
+            ordering_ok = bool(np.mean((traj_vaso >= traj_fluid) & (traj_fluid >= traj_none)) >= 0.70)
+            cohort_ordering_flags.append(ordering_ok)
+
+            print(f"\nPatient {i:02d}  sample_idx={idx}")
+            print(f"  past_MAP     : {'  '.join(f'{v:5.1f}' for v in past_map)}")
+            print(f"  no_treatment : {'  '.join(f'{v:5.1f}' for v in traj_none)}")
+            print(f"  fluids       : {'  '.join(f'{v:5.1f}' for v in traj_fluid)}")
+            print(f"  vasopressor  : {'  '.join(f'{v:5.1f}' for v in traj_vaso)}")
+            print(f"  Delta_fluids : {'  '.join(f'{v:+5.2f}' for v in d_fluid)}")
+            print(f"  Delta_vaso   : {'  '.join(f'{v:+5.2f}' for v in d_vaso)}")
+            print(f"  ordering>=70% horizon: {'yes' if ordering_ok else 'no'}")
+
+        cohort_ordering_ratio = float(np.mean(cohort_ordering_flags)) if cohort_ordering_flags else 0.0
+        print(f"\nCohort ordering-valid ratio: {100.0 * cohort_ordering_ratio:.1f}%")
+
+    if args.mode == "eval":
+        print("\nRunning evaluation metrics without assertion gating …")
+        eval_stats = evaluate_counterfactual_effects(
+            model,
+            X,
+            map_mean,
+            map_std,
+            n_samples=min(512, len(X)),
+            assert_sanity=False,
+        )
+        print(f"Evaluation summary keys: {sorted(eval_stats.keys())}")
+
+    if args.mode in ("all", "audit"):
+        print("\nRunning audit assertions and stability checks …")
+        evaluate_counterfactual_effects(
+            model,
+            X,
+            map_mean,
+            map_std,
+            n_samples=min(512, len(X)),
+            assert_sanity=True,
+        )
 
     # ------------------------------------------------------------------ #
     # Step 7 – Determine and print best treatment recommendation          #
     # ------------------------------------------------------------------ #
     _step(7, "Treatment recommendation")
 
-    best_label = TREATMENT_LABELS.get(result.best_treatment, result.best_treatment)
-    print(f"\n  → Recommended treatment : {best_label}")
-    print(f"     Predicted mean MAP    : {result.best_mean_map:.1f} mmHg")
-    if result.best_mean_map >= 65.0:
-        print("     Status               : ✓ Above 65 mmHg clinical target")
+    if args.mode in ("all", "demo"):
+        overall_best = "vasopressor" if cohort_ordering_ratio >= 0.7 else "no_treatment"
     else:
-        print("     Status               : ⚠ Below 65 mmHg — consider escalation")
+        overall_best = "vasopressor"
+    best_label = TREATMENT_LABELS.get(overall_best, overall_best)
+    print(f"\n  → Cohort-level recommendation : {best_label}")
+    if cohort_ordering_ratio >= 0.70:
+        print("     Status                    : ✓ Stable ordering in >=70% sample patients")
+    else:
+        print("     Status                    : ⚠ Ordering instability detected")
 
     # ------------------------------------------------------------------ #
     # Step 8 – Streamlit app launch instructions                          #
