@@ -8,6 +8,7 @@ suitable for training the GRU model.
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -106,8 +107,8 @@ def extract_treatment_series(
     df = df.dropna(subset=["drugname"])
     drug_lower = df["drugname"].str.lower()
 
-    vaso_pattern = "|".join(VASOPRESSOR_KEYWORDS)
-    fluid_pattern = "|".join(FLUID_KEYWORDS)
+    vaso_pattern = "|".join(re.escape(k) for k in VASOPRESSOR_KEYWORDS)
+    fluid_pattern = "|".join(re.escape(k) for k in FLUID_KEYWORDS)
 
     df["is_vaso"] = drug_lower.str.contains(vaso_pattern, na=False)
     # Fluids are only flagged when the drug is NOT a vasopressor (vasopressor takes priority)

@@ -152,13 +152,12 @@ def train_model(
             main_loss = criterion(pred, yb)
 
             # Counterfactual consistency loss: encourage divergence between arms.
-            # Build a single 3x stacked batch with each treatment arm overridden
-            # to avoid redundant clones of the full tensor.
+            # Build a single 3x stacked batch using repeat (one copy per arm).
             if cf_loss_weight > 0:
                 b = xb.shape[0]
-                xb_stack = xb.unsqueeze(0).expand(3, -1, -1, -1).reshape(3 * b, *xb.shape[1:]).clone()
+                xb_stack = xb.repeat(3, 1, 1)
                 # Set treatment column to 0, 1, 2 for the three segments
-                treat_vals = torch.tensor([0.0, 1.0, 2.0], device=dev).repeat_interleave(b)
+                treat_vals = torch.arange(3, dtype=xb.dtype, device=dev).repeat_interleave(b)
                 xb_stack[:, :, 1] = treat_vals.unsqueeze(1)
                 preds_all = model(xb_stack)
                 pred_none, pred_fluid, pred_vaso = preds_all.chunk(3, dim=0)
@@ -174,7 +173,7 @@ def train_model(
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-            train_losses.append(main_loss.item())
+            train_losses.append(loss.item())
 
         # ---- Validate ----
         model.eval()
@@ -267,9 +266,12 @@ def evaluate_counterfactual_effects(
     -------
     dict with keys 'delta_fluids_h1', 'delta_vaso_h1', 'ordering_ok'
     """
+    # Use the model's current device rather than inferring from CUDA availability
+    # so this works correctly for CPU-loaded models (e.g. via load_model).
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    dev = torch.device(device)
+        dev = next(model.parameters()).device
+    else:
+        dev = torch.device(device)
 
     idx = np.random.default_rng(0).choice(len(X), size=min(n_samples, len(X)), replace=False)
     X_sub = X[idx].copy().astype(np.float32)

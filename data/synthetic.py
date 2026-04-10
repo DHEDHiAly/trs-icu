@@ -28,6 +28,16 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+# Treatment effect parameters are defined in utils.helpers and imported here so
+# both synthetic CSV generation and make_synthetic_sequences share a single
+# source of truth, preventing silent drift between the two.
+from utils.helpers import (
+    _FLUID_DECAY_RANGE,
+    _FLUID_EFFECT_RANGE,
+    _VASO_DECAY_RANGE,
+    _VASO_EFFECT_RANGE,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -49,12 +59,6 @@ _FLUID_DRUGS = [
     "Lactated Ringer's",
     "Albumin 5%",
 ]
-
-# Treatment effect parameters (must stay consistent with utils/helpers.py)
-_VASO_EFFECT_RANGE = (3.0, 6.0)
-_VASO_DECAY_RANGE = (0.40, 0.60)
-_FLUID_EFFECT_RANGE = (1.5, 3.0)
-_FLUID_DECAY_RANGE = (0.20, 0.35)
 
 
 # ---------------------------------------------------------------------------
